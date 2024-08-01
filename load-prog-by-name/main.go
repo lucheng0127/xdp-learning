@@ -3,10 +3,12 @@ package main
 import (
 	"bytes"
 	_ "embed"
+	"errors"
 	"fmt"
 	"net"
 	"os"
 	"os/signal"
+	"time"
 
 	"github.com/cilium/ebpf"
 	"github.com/cilium/ebpf/link"
@@ -14,10 +16,25 @@ import (
 	"github.com/urfave/cli/v2"
 )
 
-//go:generate clang -target bpf -c prog.c -o prog.o
+//go:generate clang -g -target bpf -O2 -c prog.c -o prog.o
 
 //go:embed prog.o
 var ProgBytes []byte
+
+type XDP_ACTION int
+
+const (
+	XDP_ABORTED XDP_ACTION = iota
+	XDP_DROP
+	XDP_PASS
+	XDP_TX
+	XDP_REDIRECT
+)
+
+type Datarec struct {
+	RxPkts  uint64
+	RxBytes uint64
+}
 
 func LoadBPFProg(cCtx *cli.Context) error {
 	// Remove resource limit
@@ -54,12 +71,35 @@ func LoadBPFProg(cCtx *cli.Context) error {
 	}
 	defer link.Close()
 
+	statsMap := coll.Maps["xdp_stats_map"]
+	if statsMap == nil {
+		return errors.New("xdp_stats_map not exist")
+	}
+
 	// Waiting for exit
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, os.Interrupt)
-	sig := <-stop
-	fmt.Printf("Receive %s, exist..", sig)
-	return nil
+	tick := time.Tick(time.Second)
+
+	for {
+		select {
+		case sig := <-stop:
+			fmt.Printf("Receive %s, exist..", sig)
+			return nil
+		case <-tick:
+			var passDr Datarec
+			if err := statsMap.Lookup(uint32(XDP_PASS), &passDr); err != nil {
+				return err
+			}
+
+			var dropDr Datarec
+			if err := statsMap.Lookup(uint32(XDP_DROP), &dropDr); err != nil {
+				return err
+			}
+
+			fmt.Printf("====================\nstats\npass: %+v\ndrop: %+v\n", passDr, dropDr)
+		}
+	}
 }
 
 func main() {
