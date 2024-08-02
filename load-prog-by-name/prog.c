@@ -40,6 +40,10 @@ int xdp_stats_record_action(struct xdp_md *ctx, int action)
 	rec->rx_pkts++;
 	rec->rx_bytes += bytes;
 
+	// Checkout the log via cat cat /sys/kernel/debug/tracing/trace_pipe
+	char info_fmt[] = "action %d bytes %d";
+	bpf_trace_printk(info_fmt, sizeof(info_fmt), action, bytes);
+
 	return action;
 }
 
@@ -54,3 +58,6 @@ int  xdp_drop_func(struct xdp_md *ctx)
 {
 	return xdp_stats_record_action(ctx, XDP_DROP);
 }
+
+// Add GPL license nor can't call bpf_trace_printk
+char _license[] SEC("license") = "GPL";
